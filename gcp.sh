@@ -318,10 +318,6 @@ func_create_vpc_subnets() {
     local selected_regions
     selected_regions=($(select_regions_multi))
     echo "你选择的区域: ${selected_regions[*]}"
-
-    local subnet_combo_prefix
-    subnet_combo_prefix=$(build_region_combo_prefix "${selected_regions[@]}")
-    echo "自动生成的子网命名前缀: ${CYAN}${subnet_combo_prefix}${RESET}"
     echo "------------------------------------"
 
     echo "-> 检查 VPC 是否已存在..."
@@ -344,18 +340,17 @@ func_create_vpc_subnets() {
     echo "------------------------------------"
     echo "-> 开始创建双栈子网..."
 
-    local total="${#selected_regions[@]}"
     local idx=1
+    local total="${#selected_regions[@]}"
     local region
     for region in "${selected_regions[@]}"; do
         local cidr="${REGION_CIDR_MAP[$region]}"
         local alias="${REGION_ALIAS_MAP[$region]}"
-        local final_subnet_name=""
+        local final_subnet_name="$alias"
 
-        if [ "$total" -eq 1 ]; then
-            final_subnet_name="$alias"
-        else
-            final_subnet_name="${subnet_combo_prefix}_${alias}"
+        if [ -z "$alias" ]; then
+            echo -e "${RED}[错误] 区域 [$region] 没有定义简称，请检查 REGION_ALIAS_MAP。${RESET}"
+            continue
         fi
 
         echo "[$idx/$total] 创建子网: $final_subnet_name | 区域: $region | IPv4: $cidr"
