@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ====================================
-# GCP 实例 / VPC 快捷管理脚本（完整整合最新版）
+# GCP 实例 / VPC 快捷管理脚本（修正版）
 # ====================================
 
 set -u
@@ -111,10 +111,10 @@ ensure_required_apis() {
     fi
 
     local apis=("compute.googleapis.com")
-    echo "------------------------------------"
-    echo ">>> 检查并自动启用所需 API ..."
     local api enabled
 
+    echo "------------------------------------"
+    echo ">>> 检查并自动启用所需 API ..."
     for api in "${apis[@]}"; do
         enabled=$(gcloud services list --enabled --project="$PROJECT" \
             --filter="config.name:${api}" \
@@ -242,7 +242,7 @@ func_set_default_project() {
     echo
 }
 
-# ---------- 显示区域菜单 ----------
+# ---------- 区域菜单：只负责显示 ----------
 print_region_menu() {
     echo "【亚太区域列表】"
     local i=1
@@ -254,23 +254,25 @@ print_region_menu() {
     echo "------------------------------------"
 }
 
-# ---------- 选择区域（多选） ----------
-select_regions_multi() {
-    print_region_menu
+# ---------- 区域选择：只返回纯 region 值 ----------
+read_regions_multi() {
+    local region_choices
     read -p "请输入区域编号，可多选（如 1,2,4；直接回车默认 2=asia-east2）: " region_choices
     region_choices=${region_choices:-2}
 
-    local selected_regions=()
     local cleaned
     cleaned=$(echo "$region_choices" | tr -d ' ')
 
-    IFS=',' read -ra nums <<< "$cleaned"
+    local selected_regions=()
+    local nums=()
     local n
+    IFS=',' read -ra nums <<< "$cleaned"
+
     for n in "${nums[@]}"; do
         if [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -ge 1 ] && [ "$n" -le "${#REGION_LIST[@]}" ]; then
             selected_regions+=("${REGION_LIST[$((n-1))]}")
         else
-            echo -e "${YELLOW}[警告] 已忽略无效编号: $n${RESET}"
+            echo -e "${YELLOW}[警告] 已忽略无效编号: $n${RESET}" >&2
         fi
     done
 
@@ -299,8 +301,10 @@ func_create_vpc_subnets() {
     VPC_NAME=${VPC_NAME:-$DEFAULT_VPC_NAME}
 
     echo "------------------------------------"
+    print_region_menu
+
     local selected_regions=()
-    mapfile -t selected_regions < <(select_regions_multi)
+    mapfile -t selected_regions < <(read_regions_multi)
 
     if [ "${#selected_regions[@]}" -eq 0 ]; then
         echo -e "${RED}[错误] 未获取到有效区域，操作终止。${RESET}"
@@ -318,7 +322,8 @@ func_create_vpc_subnets() {
         gcloud compute networks create "$VPC_NAME" \
             --project="$PROJECT" \
             --subnet-mode=custom \
-            --enable-ula-internal-ipv6
+            --enable-ula-internal-ipv6 \
+            --quiet >/dev/null
 
         if [ $? -ne 0 ]; then
             echo -e "${RED}[错误] VPC 创建失败。${RESET}"
@@ -333,6 +338,8 @@ func_create_vpc_subnets() {
     local idx=1
     local total="${#selected_regions[@]}"
     local region cidr alias final_subnet_name
+    local subnet_ok=0
+    local subnet_fail=0
 
     for region in "${selected_regions[@]}"; do
         cidr="${REGION_CIDR_MAP[$region]:-}"
@@ -341,12 +348,14 @@ func_create_vpc_subnets() {
 
         if [ -z "$cidr" ]; then
             echo -e "${RED}[错误] 区域 [$region] 没有匹配到 IPv4 CIDR，已跳过。${RESET}"
+            ((subnet_fail++))
             ((idx++))
             continue
         fi
 
         if [ -z "$alias" ]; then
             echo -e "${RED}[错误] 区域 [$region] 没有定义简称，已跳过。${RESET}"
+            ((subnet_fail++))
             ((idx++))
             continue
         fi
@@ -357,25 +366,32 @@ func_create_vpc_subnets() {
             --project="$PROJECT" \
             --region="$region" >/dev/null 2>&1; then
             echo -e "${YELLOW}[提示] 子网 $final_subnet_name ($region) 已存在，跳过。${RESET}"
-        else
-            gcloud compute networks subnets create "$final_subnet_name" \
-                --project="$PROJECT" \
-                --network="$VPC_NAME" \
-                --region="$region" \
-                --range="$cidr" \
-                --stack-type=IPV4_IPV6 \
-                --ipv6-access-type=EXTERNAL
+            ((subnet_ok++))
+            ((idx++))
+            continue
+        fi
 
-            if [ $? -eq 0 ]; then
-                echo -e "${GREEN}>>> 子网创建成功: $final_subnet_name ($region)${RESET}"
-            else
-                echo -e "${RED}[错误] 子网创建失败: $final_subnet_name ($region)${RESET}"
-            fi
+        gcloud compute networks subnets create "$final_subnet_name" \
+            --project="$PROJECT" \
+            --network="$VPC_NAME" \
+            --region="$region" \
+            --range="$cidr" \
+            --stack-type=IPV4_IPV6 \
+            --ipv6-access-type=EXTERNAL \
+            --quiet >/dev/null 2>&1
+
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}>>> 子网创建成功: $final_subnet_name ($region)${RESET}"
+            ((subnet_ok++))
+        else
+            echo -e "${RED}[错误] 子网创建失败: $final_subnet_name ($region)${RESET}"
+            ((subnet_fail++))
         fi
         ((idx++))
     done
 
-    echo -e "${GREEN}>>> VPC / 双栈子网处理完成。${RESET}\n"
+    echo "------------------------------------"
+    echo -e "${GREEN}>>> VPC / 双栈子网处理完成。成功: ${subnet_ok} ，失败: ${subnet_fail}${RESET}\n"
 }
 
 # ---------- 选择 VPC 下子网 ----------
@@ -602,7 +618,6 @@ func_view_firewall() {
     if ! ensure_required_apis; then return; fi
 
     echo "------------------------------------"
-    echo "-> 正在向 GCP 请求防火墙数据,请稍候..."
     echo -e "\n${GREEN}【 防火墙规则列表 】${RESET}"
     gcloud compute firewall-rules list --project="$PROJECT"
     echo -e "==========================================================\n"
@@ -680,7 +695,6 @@ func_setup_ssh() {
     if ! select_existing_vm; then return; fi
 
     local ROOT_PASS ROOT_PASS_CONFIRM
-
     while true; do
         read -s -p "请设置新的 Root 密码 (输入时不可见): " ROOT_PASS
         echo
@@ -710,10 +724,8 @@ sudo systemctl restart ssh || sudo systemctl restart sshd"
 
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}>>> SSH 配置成功!${RESET}"
-        echo -e ">>> 现在你可以使用第三方工具连接:"
-        echo -e "    - 用户名: ${CYAN}root${RESET}"
-        echo -e "    - 密  码: ${CYAN}(你刚才设置的密码)${RESET}"
-        echo -e "    - 端  口: ${CYAN}${DEFAULT_SSH_PORT}${RESET}"
+        echo -e ">>> 用户名: ${CYAN}root${RESET}"
+        echo -e ">>> 端口: ${CYAN}${DEFAULT_SSH_PORT}${RESET}"
     else
         echo -e "${YELLOW}>>> SSH 配置过程中可能出现错误，请检查网络连接。${RESET}"
     fi
@@ -730,13 +742,10 @@ func_view_vm() {
     if ! ensure_required_apis; then return; fi
 
     echo "------------------------------------"
-    echo "-> 正在向 GCP 请求全局数据,请稍候..."
     echo -e "\n${GREEN}【 实例详细信息列表 】${RESET}"
-
     gcloud compute instances list \
         --project="$PROJECT" \
         --format="table(name:label=实例名称,zone.basename():label=可用区,networkInterfaces[0].accessConfigs[0].natIP:label=公网IPv4,networkInterfaces[0].ipv6AccessConfigs[0].externalIpv6:label=公网IPv6,disks[0].diskSizeGb:label=磁盘GB,disks[0].licenses[0].basename():label=系统,status:label=状态)"
-
     echo -e "==========================================================\n"
 }
 
@@ -767,7 +776,7 @@ func_delete_vm() {
 main_menu() {
     while true; do
         echo "=============================================="
-        echo "       GCP 实例 / VPC 快捷管理脚本 v1.1        "
+        echo "      GCP 实例 / VPC 快捷管理脚本  v1.2        "
         echo "=============================================="
         echo "  1. 查看账号的项目"
         echo "  2. 设置默认项目"
@@ -785,7 +794,6 @@ main_menu() {
         echo "----------------------------------------------"
 
         read -p "请输入对应的数字 [0-10]: " choice
-
         case $choice in
             1) func_view_projects ;;
             2) func_set_default_project ;;
