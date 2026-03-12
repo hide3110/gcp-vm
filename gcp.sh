@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ====================================
-# GCP 实例 / VPC 快捷管理脚本（完整整合最新版）
+# GCP 实例 / VPC 快捷管理脚本(完整整合最终版)
 # ====================================
 
 set -u
@@ -80,7 +80,7 @@ declare -A REGION_ALIAS_MAP=(
 # ---------- 基础检查 ----------
 check_gcloud() {
     if ! command -v gcloud >/dev/null 2>&1; then
-        echo -e "${RED}[错误] 未检测到 gcloud，请先安装并登录 Google Cloud SDK。${RESET}"
+        echo -e "${RED}[错误] 未检测到 gcloud,请先安装并登录 Google Cloud SDK。${RESET}"
         exit 1
     fi
 }
@@ -106,7 +106,7 @@ show_current_project() {
 # ---------- 自动启用 API ----------
 ensure_required_apis() {
     if ! auto_get_project; then
-        echo -e "${YELLOW}[提示] 当前未设置默认项目，无法启用 API。${RESET}"
+        echo -e "${YELLOW}[提示] 当前未设置默认项目,无法启用 API。${RESET}"
         return 1
     fi
 
@@ -140,13 +140,13 @@ ensure_required_apis() {
 # ---------- 创建项目 ----------
 create_project_interactive() {
     echo -e "\n>>> 准备创建新项目..."
-    read -p "请输入新的项目 ID（全局唯一）: " new_project_id
+    read -p "请输入新的项目 ID(全局唯一): " new_project_id
     if [ -z "$new_project_id" ]; then
         echo -e "${YELLOW}[错误] 项目 ID 不能为空。${RESET}"
         return 1
     fi
 
-    read -p "请输入项目名称（可留空默认同项目ID）: " new_project_name
+    read -p "请输入项目名称(可留空默认同项目ID): " new_project_name
     new_project_name=${new_project_name:-$new_project_id}
 
     gcloud projects create "$new_project_id" --name="$new_project_name"
@@ -158,7 +158,7 @@ create_project_interactive() {
     PROJECT="$new_project_id"
     echo -e "${GREEN}>>> 项目创建成功: $PROJECT${RESET}"
 
-    read -p "是否将其设置为默认项目？(Y/n): " set_choice
+    read -p "是否将其设置为默认项目?(Y/n): " set_choice
     if [[ -z "$set_choice" || "$set_choice" == "y" || "$set_choice" == "Y" ]]; then
         gcloud config set project "$PROJECT" >/dev/null
         if [ $? -eq 0 ]; then
@@ -177,7 +177,7 @@ select_project() {
 
     if [ -z "$projects_data" ]; then
         echo -e "${YELLOW}[提示] 当前账号下没有查询到项目。${RESET}"
-        read -p "是否现在创建新项目？(y/N): " create_choice
+        read -p "是否现在创建新项目?(y/N): " create_choice
         if [[ "$create_choice" == "y" || "$create_choice" == "Y" ]]; then
             create_project_interactive
             return $?
@@ -190,7 +190,7 @@ select_project() {
     local pid pname
 
     echo "------------------------------------"
-    echo "发现以下项目，请选择:"
+    echo "发现以下项目,请选择:"
     while read -r pid pname; do
         [ -z "$pid" ] && continue
         pids+=("$pid")
@@ -214,19 +214,19 @@ select_project() {
             echo -e "${GREEN}>>> 已选择项目: $PROJECT${RESET}"
             return 0
         else
-            echo -e "${YELLOW}[错误] 输入无效，请重试。${RESET}"
+            echo -e "${YELLOW}[错误] 输入无效,请重试。${RESET}"
         fi
     done
 }
 
-# ---------- 功能1：查看项目 ----------
+# ---------- 功能1:查看项目 ----------
 func_view_projects() {
     echo -e "\n>>> 查看账号下所有项目..."
     gcloud projects list
     echo
 }
 
-# ---------- 功能2：设置默认项目 ----------
+# ---------- 功能2:设置默认项目 ----------
 func_set_default_project() {
     echo -e "\n>>> 设置默认项目..."
     if ! select_project; then return; fi
@@ -256,7 +256,7 @@ print_region_menu() {
 # ---------- 读取区域多选 ----------
 read_regions_multi() {
     local region_choices
-    read -p "请输入区域编号，可多选（如 1,2,4；直接回车默认 2=asia-east2）: " region_choices
+    read -p "请输入区域编号,可多选(如 1,2,4;直接回车默认 2=asia-east2): " region_choices
     region_choices=${region_choices:-2}
 
     local cleaned
@@ -282,7 +282,16 @@ read_regions_multi() {
     printf '%s\n' "${selected_regions[@]}"
 }
 
-# ---------- 功能3：创建 VPC 和双栈子网 ----------
+# ---------- 构建防火墙规则名 ----------
+build_firewall_rule_names() {
+    local vpc="$1"
+    FW_RULE_V4IN="${vpc}-v4in"
+    FW_RULE_V4OUT="${vpc}-v4out"
+    FW_RULE_V6IN="${vpc}-v6in"
+    FW_RULE_V6OUT="${vpc}-v6out"
+}
+
+# ---------- 功能3:创建 VPC 和双栈子网 ----------
 func_create_vpc_subnets() {
     echo -e "\n>>> 准备创建 VPC 网络和双栈子网..."
     if ! auto_get_project >/dev/null 2>&1; then
@@ -292,7 +301,7 @@ func_create_vpc_subnets() {
     fi
 
     if ! ensure_required_apis; then
-        echo -e "${RED}[错误] API 启用失败，无法继续。${RESET}"
+        echo -e "${RED}[错误] API 启用失败,无法继续。${RESET}"
         return
     fi
 
@@ -306,7 +315,7 @@ func_create_vpc_subnets() {
     mapfile -t selected_regions < <(read_regions_multi)
 
     if [ "${#selected_regions[@]}" -eq 0 ]; then
-        echo -e "${RED}[错误] 未获取到有效区域，操作终止。${RESET}"
+        echo -e "${RED}[错误] 未获取到有效区域,操作终止。${RESET}"
         return
     fi
 
@@ -315,9 +324,9 @@ func_create_vpc_subnets() {
 
     echo "-> 检查 VPC 是否已存在..."
     if gcloud compute networks describe "$VPC_NAME" --project="$PROJECT" >/dev/null 2>&1; then
-        echo -e "${YELLOW}[提示] VPC $VPC_NAME 已存在，跳过创建。${RESET}"
+        echo -e "${YELLOW}[提示] VPC $VPC_NAME 已存在,跳过创建。${RESET}"
     else
-        echo "-> 正在创建 VPC（自定义模式 + 自动分配 ULA 内部 IPv6 范围）..."
+        echo "-> 正在创建 VPC(自定义模式 + 自动分配 ULA 内部 IPv6 范围)..."
         gcloud compute networks create "$VPC_NAME" \
             --project="$PROJECT" \
             --subnet-mode=custom \
@@ -346,14 +355,14 @@ func_create_vpc_subnets() {
         final_subnet_name="$alias"
 
         if [ -z "$cidr" ]; then
-            echo -e "${RED}[错误] 区域 [$region] 没有匹配到 IPv4 CIDR，已跳过。${RESET}"
+            echo -e "${RED}[错误] 区域 [$region] 没有匹配到 IPv4 CIDR,已跳过。${RESET}"
             ((subnet_fail++))
             ((idx++))
             continue
         fi
 
         if [ -z "$alias" ]; then
-            echo -e "${RED}[错误] 区域 [$region] 没有定义简称，已跳过。${RESET}"
+            echo -e "${RED}[错误] 区域 [$region] 没有定义简称,已跳过。${RESET}"
             ((subnet_fail++))
             ((idx++))
             continue
@@ -364,7 +373,7 @@ func_create_vpc_subnets() {
         if gcloud compute networks subnets describe "$final_subnet_name" \
             --project="$PROJECT" \
             --region="$region" >/dev/null 2>&1; then
-            echo -e "${YELLOW}[提示] 子网 $final_subnet_name ($region) 已存在，跳过。${RESET}"
+            echo -e "${YELLOW}[提示] 子网 $final_subnet_name ($region) 已存在,跳过。${RESET}"
             ((subnet_ok++))
             ((idx++))
             continue
@@ -390,7 +399,7 @@ func_create_vpc_subnets() {
     done
 
     echo "------------------------------------"
-    echo -e "${GREEN}>>> VPC / 双栈子网处理完成。成功: ${subnet_ok} ，失败: ${subnet_fail}${RESET}\n"
+    echo -e "${GREEN}>>> VPC / 双栈子网处理完成。成功: ${subnet_ok} ,失败: ${subnet_fail}${RESET}\n"
 }
 
 # ---------- 选择 VPC 下子网 ----------
@@ -410,7 +419,7 @@ select_subnet_in_vpc() {
         --format="value(name,region.basename())" 2>/dev/null)
 
     if [ -z "$subnet_data" ]; then
-        echo -e "${YELLOW}[提示] 在 VPC [$VPC_NAME] 下没有找到任何子网，请先创建。${RESET}"
+        echo -e "${YELLOW}[提示] 在 VPC [$VPC_NAME] 下没有找到任何子网,请先创建。${RESET}"
         return 1
     fi
 
@@ -420,7 +429,7 @@ select_subnet_in_vpc() {
     local sname sregion
 
     echo "------------------------------------"
-    echo "发现以下子网，请选择:"
+    echo "发现以下子网,请选择:"
     while read -r sname sregion; do
         [ -z "$sname" ] && continue
         snames+=("$sname")
@@ -443,7 +452,7 @@ select_subnet_in_vpc() {
             echo -e "${GREEN}>>> 已选择子网: $SUBNET_NAME ($SUBNET_REGION)${RESET}"
             return 0
         else
-            echo -e "${YELLOW}[错误] 输入无效，请重试。${RESET}"
+            echo -e "${YELLOW}[错误] 输入无效,请重试。${RESET}"
         fi
     done
 }
@@ -469,7 +478,7 @@ select_zone_from_region() {
     local i=1
     local zname zstatus
 
-    echo "可用区列表："
+    echo "可用区列表:"
     while read -r zname zstatus; do
         [ -z "$zname" ] && continue
         zones+=("$zname")
@@ -487,12 +496,12 @@ select_zone_from_region() {
             echo -e "${GREEN}>>> 已选择可用区: $ZONE${RESET}"
             return 0
         else
-            echo -e "${YELLOW}[错误] 输入无效，请重新选择。${RESET}"
+            echo -e "${YELLOW}[错误] 输入无效,请重新选择。${RESET}"
         fi
     done
 }
 
-# ---------- 功能4：创建 VM ----------
+# ---------- 功能4:创建 VM ----------
 func_create_vm() {
     echo -e "\n>>> 准备创建虚拟机..."
     if ! auto_get_project >/dev/null 2>&1; then
@@ -502,7 +511,7 @@ func_create_vm() {
     fi
 
     if ! ensure_required_apis; then
-        echo -e "${RED}[错误] API 启用失败，无法继续。${RESET}"
+        echo -e "${RED}[错误] API 启用失败,无法继续。${RESET}"
         return
     fi
 
@@ -514,7 +523,7 @@ func_create_vm() {
 
     echo "------------------------------------"
     echo "请选择预配模型:"
-    echo "  [1] 标准（默认）"
+    echo "  [1] 标准(默认)"
     echo "  [2] Spot"
     read -p "请输入编号 [默认: 1]: " provision_choice
     provision_choice=${provision_choice:-1}
@@ -552,9 +561,9 @@ func_create_vm() {
         $provisioning_flags
 
     if [ $? -eq 0 ]; then
-        echo -e "${GREEN}>>> 实例 $NAME 创建完成！${RESET}\n"
+        echo -e "${GREEN}>>> 实例 $NAME 创建完成!${RESET}\n"
     else
-        echo -e "${RED}[错误] 实例创建失败，请检查配额、Billing、区域库存或 API 状态。${RESET}\n"
+        echo -e "${RED}[错误] 实例创建失败,请检查配额、Billing、区域库存或 API 状态。${RESET}\n"
     fi
 }
 
@@ -609,7 +618,7 @@ select_existing_vm() {
     done
 }
 
-# ---------- 功能5：查看防火墙规则 ----------
+# ---------- 功能5:查看防火墙规则 ----------
 func_view_firewall() {
     echo -e "\n>>> 准备获取当前项目的防火墙规则..."
     if ! auto_get_project; then
@@ -623,6 +632,7 @@ func_view_firewall() {
 
     read -p "请输入要查看的 VPC 名称 [默认: ${DEFAULT_VPC_NAME}]: " VPC_NAME
     VPC_NAME=${VPC_NAME:-$DEFAULT_VPC_NAME}
+    build_firewall_rule_names "$VPC_NAME"
 
     echo "------------------------------------"
     echo "-> 正在获取 VPC [$VPC_NAME] 的防火墙规则..."
@@ -637,7 +647,11 @@ func_view_firewall() {
 
     if [ -z "$firewall_data" ] || [[ "$firewall_data" != *"规则名"* ]]; then
         echo -e "${YELLOW}[提示] 在 VPC [$VPC_NAME] 下没有查询到防火墙规则。${RESET}"
-        echo -e "${YELLOW}[提示] 如需创建，可使用菜单 6 设置防火墙规则（v4v6in / v4v6out）。${RESET}\n"
+        echo -e "${YELLOW}[提示] 如需创建,可使用菜单 6 设置以下规则:${RESET}"
+        echo -e "        ${CYAN}${FW_RULE_V4IN}${RESET}"
+        echo -e "        ${CYAN}${FW_RULE_V4OUT}${RESET}"
+        echo -e "        ${CYAN}${FW_RULE_V6IN}${RESET}"
+        echo -e "        ${CYAN}${FW_RULE_V6OUT}${RESET}\n"
         return
     fi
 
@@ -646,7 +660,7 @@ func_view_firewall() {
     echo -e "==========================================================\n"
 }
 
-# ---------- 功能6：设置防火墙规则 ----------
+# ---------- 功能6:设置防火墙规则 ----------
 func_setup_firewall() {
     echo -e "\n>>> 准备设置防火墙规则..."
     if ! auto_get_project; then
@@ -660,34 +674,95 @@ func_setup_firewall() {
 
     read -p "请输入目标 VPC 名称 [默认: ${DEFAULT_VPC_NAME}]: " VPC_NAME
     VPC_NAME=${VPC_NAME:-$DEFAULT_VPC_NAME}
+    build_firewall_rule_names "$VPC_NAME"
 
     echo "------------------------------------"
-    echo "-> 正在创建入站规则 (v4v6in)..."
-    gcloud compute firewall-rules create v4v6in \
-        --project="$PROJECT" \
-        --direction=INGRESS \
-        --priority=1000 \
-        --network="$VPC_NAME" \
-        --action=ALLOW \
-        --rules=all \
-        --source-ranges=0.0.0.0/0,::/0 \
-        2>/dev/null || echo "(入站规则 v4v6in 可能已存在)"
+    echo "-> 检查目标 VPC 是否存在..."
+    if ! gcloud compute networks describe "$VPC_NAME" --project="$PROJECT" >/dev/null 2>&1; then
+        echo -e "${RED}[错误] VPC [$VPC_NAME] 不存在,请先创建 VPC 和子网。${RESET}"
+        return
+    fi
 
-    echo "-> 正在创建出站规则 (v4v6out)..."
-    gcloud compute firewall-rules create v4v6out \
-        --project="$PROJECT" \
-        --direction=EGRESS \
-        --priority=1000 \
-        --network="$VPC_NAME" \
-        --action=ALLOW \
-        --rules=all \
-        --destination-ranges=0.0.0.0/0,::/0 \
-        2>/dev/null || echo "(出站规则 v4v6out 可能已存在)"
+    echo "-> 正在创建 IPv4 入站规则 (${FW_RULE_V4IN})..."
+    if gcloud compute firewall-rules describe "$FW_RULE_V4IN" --project="$PROJECT" >/dev/null 2>&1; then
+        echo -e "${YELLOW}[提示] 规则 ${FW_RULE_V4IN} 已存在,跳过。${RESET}"
+    else
+        gcloud compute firewall-rules create "$FW_RULE_V4IN" \
+            --project="$PROJECT" \
+            --direction=INGRESS \
+            --priority=1000 \
+            --network="$VPC_NAME" \
+            --action=ALLOW \
+            --rules=all \
+            --source-ranges=0.0.0.0/0
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}>>> ${FW_RULE_V4IN} 创建成功${RESET}"
+        else
+            echo -e "${RED}[错误] ${FW_RULE_V4IN} 创建失败${RESET}"
+        fi
+    fi
 
-    echo -e "${GREEN}>>> 防火墙规则设置完成！${RESET}\n"
+    echo "-> 正在创建 IPv4 出站规则 (${FW_RULE_V4OUT})..."
+    if gcloud compute firewall-rules describe "$FW_RULE_V4OUT" --project="$PROJECT" >/dev/null 2>&1; then
+        echo -e "${YELLOW}[提示] 规则 ${FW_RULE_V4OUT} 已存在,跳过。${RESET}"
+    else
+        gcloud compute firewall-rules create "$FW_RULE_V4OUT" \
+            --project="$PROJECT" \
+            --direction=EGRESS \
+            --priority=1000 \
+            --network="$VPC_NAME" \
+            --action=ALLOW \
+            --rules=all \
+            --destination-ranges=0.0.0.0/0
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}>>> ${FW_RULE_V4OUT} 创建成功${RESET}"
+        else
+            echo -e "${RED}[错误] ${FW_RULE_V4OUT} 创建失败${RESET}"
+        fi
+    fi
+
+    echo "-> 正在创建 IPv6 入站规则 (${FW_RULE_V6IN})..."
+    if gcloud compute firewall-rules describe "$FW_RULE_V6IN" --project="$PROJECT" >/dev/null 2>&1; then
+        echo -e "${YELLOW}[提示] 规则 ${FW_RULE_V6IN} 已存在,跳过。${RESET}"
+    else
+        gcloud compute firewall-rules create "$FW_RULE_V6IN" \
+            --project="$PROJECT" \
+            --direction=INGRESS \
+            --priority=1000 \
+            --network="$VPC_NAME" \
+            --action=ALLOW \
+            --rules=all \
+            --source-ranges=::/0
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}>>> ${FW_RULE_V6IN} 创建成功${RESET}"
+        else
+            echo -e "${RED}[错误] ${FW_RULE_V6IN} 创建失败${RESET}"
+        fi
+    fi
+
+    echo "-> 正在创建 IPv6 出站规则 (${FW_RULE_V6OUT})..."
+    if gcloud compute firewall-rules describe "$FW_RULE_V6OUT" --project="$PROJECT" >/dev/null 2>&1; then
+        echo -e "${YELLOW}[提示] 规则 ${FW_RULE_V6OUT} 已存在,跳过。${RESET}"
+    else
+        gcloud compute firewall-rules create "$FW_RULE_V6OUT" \
+            --project="$PROJECT" \
+            --direction=EGRESS \
+            --priority=1000 \
+            --network="$VPC_NAME" \
+            --action=ALLOW \
+            --rules=all \
+            --destination-ranges=::/0
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}>>> ${FW_RULE_V6OUT} 创建成功${RESET}"
+        else
+            echo -e "${RED}[错误] ${FW_RULE_V6OUT} 创建失败${RESET}"
+        fi
+    fi
+
+    echo -e "${GREEN}>>> 防火墙规则设置完成!${RESET}\n"
 }
 
-# ---------- 功能7：更换 Debian 12 镜像源 ----------
+# ---------- 功能7:更换 Debian 12 镜像源 ----------
 func_change_apt_source() {
     echo -e "\n>>> 准备更换 Debian 12 镜像源..."
     if ! select_existing_vm; then return; fi
@@ -710,14 +785,14 @@ Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 EOF'"
 
     if [ $? -eq 0 ]; then
-        echo -e "${GREEN}>>> Debian 12 镜像源更换成功！${RESET}"
+        echo -e "${GREEN}>>> Debian 12 镜像源更换成功!${RESET}"
     else
-        echo -e "${YELLOW}>>> 镜像源更换出现错误，请检查网络连接。${RESET}"
+        echo -e "${YELLOW}>>> 镜像源更换出现错误,请检查网络连接。${RESET}"
     fi
     echo
 }
 
-# ---------- 功能8：一键配置 SSH ----------
+# ---------- 功能8:一键配置 SSH ----------
 func_setup_ssh() {
     echo -e "\n>>> 准备配置 SSH 环境..."
     if ! select_existing_vm; then return; fi
@@ -755,12 +830,12 @@ sudo systemctl restart ssh || sudo systemctl restart sshd"
         echo -e ">>> 用户名: ${CYAN}root${RESET}"
         echo -e ">>> 端口: ${CYAN}${DEFAULT_SSH_PORT}${RESET}"
     else
-        echo -e "${YELLOW}>>> SSH 配置过程中可能出现错误，请检查网络连接。${RESET}"
+        echo -e "${YELLOW}>>> SSH 配置过程中可能出现错误,请检查网络连接。${RESET}"
     fi
     echo
 }
 
-# ---------- 功能9：查看当前项目下所有实例信息 ----------
+# ---------- 功能9:查看当前项目下所有实例信息 ----------
 func_view_vm() {
     echo -e "\n>>> 准备扫描当前项目下的所有实例信息..."
     if ! auto_get_project; then
@@ -856,7 +931,7 @@ func_view_vm() {
     echo
 }
 
-# ---------- 功能10：删除实例 ----------
+# ---------- 功能10:删除实例 ----------
 func_delete_vm() {
     echo -e "\n${RED}>>> [警告] 准备执行删除实例操作...${RESET}"
     if ! select_existing_vm; then return; fi
@@ -883,14 +958,14 @@ func_delete_vm() {
 main_menu() {
     while true; do
         echo "=============================================="
-        echo "      GCP 实例 / VPC 快捷管理脚本  v1.4       "
+        echo "      GCP 实例 / VPC 快捷管理脚本  v1.5       "
         echo "=============================================="
         echo "  1. 查看账号的项目"
         echo "  2. 设置默认项目"
         echo "  3. 创建 VPC 网络和双栈子网(IPv4+IPv6)"
         echo "  4. 创建虚拟机"
         echo "  5. 查看防火墙规则"
-        echo "  6. 设置防火墙规则 (v4v6in/v4v6out)"
+        echo "  6. 设置防火墙规则 (VPC前缀-v4in/v4out/v6in/v6out)"
         echo "  7. 更换系统镜像源 (Debian 12 专用)"
         echo "  8. 一键配置 SSH (Root密码+端口${DEFAULT_SSH_PORT})"
         echo "  9. 查看当前项目下所有实例信息"
