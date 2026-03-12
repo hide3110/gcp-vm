@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ====================================
-# GCP 实例 / VPC 快捷管理脚本（修正版）
+# GCP 实例 / VPC 快捷管理脚本（完整整合最新版）
 # ====================================
 
 set -u
@@ -45,7 +45,7 @@ REGION_LIST=(
     "australia-southeast2"
 )
 
-# ---------- 区域对应 IPv4 段 ----------
+# ---------- 区域 IPv4 段 ----------
 declare -A REGION_CIDR_MAP=(
     ["asia-east1"]="10.140.0.0/20"
     ["asia-east2"]="10.170.0.0/20"
@@ -186,15 +186,14 @@ select_project() {
     fi
 
     local pids=()
-    local pnames=()
     local i=1
+    local pid pname
 
     echo "------------------------------------"
     echo "发现以下项目，请选择:"
     while read -r pid pname; do
         [ -z "$pid" ] && continue
         pids+=("$pid")
-        pnames+=("$pname")
         echo "  [$i] 项目ID: ${CYAN}$pid${RESET} | 项目名: $pname"
         ((i++))
     done <<< "$projects_data"
@@ -242,7 +241,7 @@ func_set_default_project() {
     echo
 }
 
-# ---------- 区域菜单：只负责显示 ----------
+# ---------- 区域菜单 ----------
 print_region_menu() {
     echo "【亚太区域列表】"
     local i=1
@@ -254,7 +253,7 @@ print_region_menu() {
     echo "------------------------------------"
 }
 
-# ---------- 区域选择：只返回纯 region 值 ----------
+# ---------- 读取区域多选 ----------
 read_regions_multi() {
     local region_choices
     read -p "请输入区域编号，可多选（如 1,2,4；直接回车默认 2=asia-east2）: " region_choices
@@ -418,6 +417,7 @@ select_subnet_in_vpc() {
     local snames=()
     local sregions=()
     local i=1
+    local sname sregion
 
     echo "------------------------------------"
     echo "发现以下子网，请选择:"
@@ -425,9 +425,10 @@ select_subnet_in_vpc() {
         [ -z "$sname" ] && continue
         snames+=("$sname")
         sregions+=("$sregion")
-        echo "  [$i] 子网名: ${CYAN}$sname${RESET} | 区域: $sregion"
+        echo -e "  [$i] 子网名: ${CYAN}$sname${RESET} | 区域: $sregion"
         ((i++))
     done <<< "$subnet_data"
+
     echo "  [0] 返回主菜单"
     echo "------------------------------------"
 
@@ -615,11 +616,33 @@ func_view_firewall() {
         echo -e "${YELLOW}[提示] 请先设置默认项目。${RESET}"
         return
     fi
-    if ! ensure_required_apis; then return; fi
+
+    if ! ensure_required_apis; then
+        return
+    fi
+
+    read -p "请输入要查看的 VPC 名称 [默认: ${DEFAULT_VPC_NAME}]: " VPC_NAME
+    VPC_NAME=${VPC_NAME:-$DEFAULT_VPC_NAME}
 
     echo "------------------------------------"
-    echo -e "\n${GREEN}【 防火墙规则列表 】${RESET}"
-    gcloud compute firewall-rules list --project="$PROJECT"
+    echo "-> 正在获取 VPC [$VPC_NAME] 的防火墙规则..."
+    echo
+
+    local firewall_data
+    firewall_data=$(gcloud compute firewall-rules list \
+        --project="$PROJECT" \
+        --filter="network~.*/${VPC_NAME}$" \
+        --format="table(name:label=规则名,network.basename():label=网络,direction:label=方向,priority:label=优先级,disabled:label=禁用,sourceRanges.list():label=源范围,destinationRanges.list():label=目标范围,allowed[].map().firewall_rule().list():label=允许,denied[].map().firewall_rule().list():label=拒绝)" \
+        2>/dev/null)
+
+    if [ -z "$firewall_data" ] || [[ "$firewall_data" != *"规则名"* ]]; then
+        echo -e "${YELLOW}[提示] 在 VPC [$VPC_NAME] 下没有查询到防火墙规则。${RESET}"
+        echo -e "${YELLOW}[提示] 如需创建，可使用菜单 6 设置防火墙规则（v4v6in / v4v6out）。${RESET}\n"
+        return
+    fi
+
+    echo -e "${GREEN}【 VPC ${VPC_NAME} 的防火墙规则列表 】${RESET}"
+    echo "$firewall_data"
     echo -e "==========================================================\n"
 }
 
@@ -630,7 +653,10 @@ func_setup_firewall() {
         echo -e "${YELLOW}[提示] 请先设置默认项目。${RESET}"
         return
     fi
-    if ! ensure_required_apis; then return; fi
+
+    if ! ensure_required_apis; then
+        return
+    fi
 
     read -p "请输入目标 VPC 名称 [默认: ${DEFAULT_VPC_NAME}]: " VPC_NAME
     VPC_NAME=${VPC_NAME:-$DEFAULT_VPC_NAME}
@@ -644,7 +670,8 @@ func_setup_firewall() {
         --network="$VPC_NAME" \
         --action=ALLOW \
         --rules=all \
-        --source-ranges=0.0.0.0/0,::/0 2>/dev/null || echo "(入站规则 v4v6in 可能已存在)"
+        --source-ranges=0.0.0.0/0,::/0 \
+        2>/dev/null || echo "(入站规则 v4v6in 可能已存在)"
 
     echo "-> 正在创建出站规则 (v4v6out)..."
     gcloud compute firewall-rules create v4v6out \
@@ -654,7 +681,8 @@ func_setup_firewall() {
         --network="$VPC_NAME" \
         --action=ALLOW \
         --rules=all \
-        --destination-ranges=0.0.0.0/0,::/0 2>/dev/null || echo "(出站规则 v4v6out 可能已存在)"
+        --destination-ranges=0.0.0.0/0,::/0 \
+        2>/dev/null || echo "(出站规则 v4v6out 可能已存在)"
 
     echo -e "${GREEN}>>> 防火墙规则设置完成！${RESET}\n"
 }
@@ -732,21 +760,100 @@ sudo systemctl restart ssh || sudo systemctl restart sshd"
     echo
 }
 
-# ---------- 功能9：查看实例信息 ----------
+# ---------- 功能9：查看当前项目下所有实例信息 ----------
 func_view_vm() {
     echo -e "\n>>> 准备扫描当前项目下的所有实例信息..."
     if ! auto_get_project; then
         echo -e "${YELLOW}[提示] 请先设置默认项目。${RESET}"
         return
     fi
-    if ! ensure_required_apis; then return; fi
+
+    if ! ensure_required_apis; then
+        return
+    fi
 
     echo "------------------------------------"
-    echo -e "\n${GREEN}【 实例详细信息列表 】${RESET}"
-    gcloud compute instances list \
+    echo -e "${GREEN}【 实例详细信息列表 】${RESET}"
+
+    local instances_data
+    instances_data=$(gcloud compute instances list \
         --project="$PROJECT" \
-        --format="table(name:label=实例名称,zone.basename():label=可用区,networkInterfaces[0].accessConfigs[0].natIP:label=公网IPv4,networkInterfaces[0].ipv6AccessConfigs[0].externalIpv6:label=公网IPv6,disks[0].diskSizeGb:label=磁盘GB,disks[0].licenses[0].basename():label=系统,status:label=状态)"
-    echo -e "==========================================================\n"
+        --format="value(name,zone.basename())" 2>/dev/null)
+
+    if [ -z "$instances_data" ]; then
+        echo -e "${YELLOW}[提示] 当前项目下没有实例。${RESET}"
+        echo
+        return
+    fi
+
+    local name zone
+    while read -r name zone; do
+        [ -z "$name" ] && continue
+
+        local status
+        local public_ipv4
+        local public_ipv6
+        local disk_gb
+        local image_name
+        local provisioning_model
+        local network_tier
+
+        status=$(gcloud compute instances describe "$name" \
+            --project="$PROJECT" \
+            --zone="$zone" \
+            --format="value(status)" 2>/dev/null)
+
+        public_ipv4=$(gcloud compute instances describe "$name" \
+            --project="$PROJECT" \
+            --zone="$zone" \
+            --format="value(networkInterfaces[0].accessConfigs[0].natIP)" 2>/dev/null)
+
+        public_ipv6=$(gcloud compute instances describe "$name" \
+            --project="$PROJECT" \
+            --zone="$zone" \
+            --format="value(networkInterfaces[0].ipv6AccessConfigs[0].externalIpv6)" 2>/dev/null)
+
+        disk_gb=$(gcloud compute instances describe "$name" \
+            --project="$PROJECT" \
+            --zone="$zone" \
+            --format="value(disks[0].diskSizeGb)" 2>/dev/null)
+
+        image_name=$(gcloud compute instances describe "$name" \
+            --project="$PROJECT" \
+            --zone="$zone" \
+            --format="value(disks[0].licenses[0].basename())" 2>/dev/null)
+
+        provisioning_model=$(gcloud compute instances describe "$name" \
+            --project="$PROJECT" \
+            --zone="$zone" \
+            --format="value(scheduling.provisioningModel)" 2>/dev/null)
+
+        network_tier=$(gcloud compute instances describe "$name" \
+            --project="$PROJECT" \
+            --zone="$zone" \
+            --format="value(networkInterfaces[0].accessConfigs[0].networkTier)" 2>/dev/null)
+
+        provisioning_model=${provisioning_model:-STANDARD}
+        network_tier=${network_tier:-PREMIUM}
+        public_ipv4=${public_ipv4:-"-"}
+        public_ipv6=${public_ipv6:-"-"}
+        disk_gb=${disk_gb:-"-"}
+        image_name=${image_name:-"-"}
+        status=${status:-"-"}
+
+        echo "实例名称: $name"
+        echo "可用区: $zone"
+        echo "公网IPv4: $public_ipv4"
+        echo "公网IPv6: $public_ipv6"
+        echo "磁盘GB: $disk_gb"
+        echo "系统: $image_name"
+        echo "预配模型: $provisioning_model"
+        echo "网络层级: $network_tier"
+        echo "状态: $status"
+        echo "=========================================================="
+    done <<< "$instances_data"
+
+    echo
 }
 
 # ---------- 功能10：删除实例 ----------
@@ -776,7 +883,7 @@ func_delete_vm() {
 main_menu() {
     while true; do
         echo "=============================================="
-        echo "      GCP 实例 / VPC 快捷管理脚本  v1.2        "
+        echo "      GCP 实例 / VPC 快捷管理脚本  v1.4       "
         echo "=============================================="
         echo "  1. 查看账号的项目"
         echo "  2. 设置默认项目"
@@ -811,6 +918,6 @@ main_menu() {
     done
 }
 
-# ---------- 入口 ----------
+# ---------- 程序入口 ----------
 check_gcloud
 main_menu
