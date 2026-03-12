@@ -1,19 +1,7 @@
 #!/bin/bash
 
 # ====================================
-# GCP 实例 / VPC 快捷管理脚本（最终增强版）
-# 功能：
-# 1. 查看账号项目
-# 2. 设置默认项目
-# 3. 创建 VPC 网络和双栈子网(IPv4+IPv6)
-# 4. 创建虚拟机
-# 5. 查看防火墙规则
-# 6. 设置防火墙规则
-# 7. 更换 Debian 12 镜像源
-# 8. 一键配置 SSH
-# 9. 查看当前项目下所有实例信息
-# 10. 删除实例
-# 0. 退出
+# GCP 实例 / VPC 快捷管理脚本（完整整合最新版）
 # ====================================
 
 set -u
@@ -41,38 +29,7 @@ RED="\033[91m"
 CYAN="\033[96m"
 RESET="\033[0m"
 
-# ---------- 区域与 IPv4 段 ----------
-declare -A REGION_CIDR_MAP=(
-    ["asia-east1"]="10.140.0.0/20"
-    ["asia-east2"]="10.170.0.0/20"
-    ["asia-northeast1"]="10.146.0.0/20"
-    ["asia-northeast2"]="10.174.0.0/20"
-    ["asia-northeast3"]="10.178.0.0/20"
-    ["asia-south1"]="10.160.0.0/20"
-    ["asia-south2"]="10.190.0.0/20"
-    ["asia-southeast1"]="10.148.0.0/20"
-    ["asia-southeast2"]="10.184.0.0/20"
-    ["asia-southeast3"]="10.232.0.0/20"
-    ["australia-southeast1"]="10.152.0.0/20"
-    ["australia-southeast2"]="10.192.0.0/20"
-)
-
-# ---------- 区域简写 ----------
-declare -A REGION_ALIAS_MAP=(
-    ["asia-east1"]="tw"
-    ["asia-east2"]="hk"
-    ["asia-northeast1"]="jp1"
-    ["asia-northeast2"]="jp2"
-    ["asia-northeast3"]="kr"
-    ["asia-south1"]="in1"
-    ["asia-south2"]="in2"
-    ["asia-southeast1"]="sg"
-    ["asia-southeast2"]="id"
-    ["asia-southeast3"]="th"
-    ["australia-southeast1"]="au1"
-    ["australia-southeast2"]="au2"
-)
-
+# ---------- 区域列表 ----------
 REGION_LIST=(
     "asia-east1"
     "asia-east2"
@@ -88,6 +45,38 @@ REGION_LIST=(
     "australia-southeast2"
 )
 
+# ---------- 区域对应 IPv4 段 ----------
+declare -A REGION_CIDR_MAP=(
+    ["asia-east1"]="10.140.0.0/20"
+    ["asia-east2"]="10.170.0.0/20"
+    ["asia-northeast1"]="10.146.0.0/20"
+    ["asia-northeast2"]="10.174.0.0/20"
+    ["asia-northeast3"]="10.178.0.0/20"
+    ["asia-south1"]="10.160.0.0/20"
+    ["asia-south2"]="10.190.0.0/20"
+    ["asia-southeast1"]="10.148.0.0/20"
+    ["asia-southeast2"]="10.184.0.0/20"
+    ["asia-southeast3"]="10.232.0.0/20"
+    ["australia-southeast1"]="10.152.0.0/20"
+    ["australia-southeast2"]="10.192.0.0/20"
+)
+
+# ---------- 区域简称 ----------
+declare -A REGION_ALIAS_MAP=(
+    ["asia-east1"]="tw"
+    ["asia-east2"]="hk"
+    ["asia-northeast1"]="jp1"
+    ["asia-northeast2"]="jp2"
+    ["asia-northeast3"]="kr"
+    ["asia-south1"]="in1"
+    ["asia-south2"]="in2"
+    ["asia-southeast1"]="sg"
+    ["asia-southeast2"]="id"
+    ["asia-southeast3"]="th"
+    ["australia-southeast1"]="au1"
+    ["australia-southeast2"]="au2"
+)
+
 # ---------- 基础检查 ----------
 check_gcloud() {
     if ! command -v gcloud >/dev/null 2>&1; then
@@ -100,29 +89,33 @@ check_gcloud() {
 auto_get_project() {
     PROJECT=$(gcloud config get-value project 2>/dev/null | tr -d '\r')
     if [ -z "$PROJECT" ] || [ "$PROJECT" = "(unset)" ]; then
-        echo -e "${YELLOW}[提示] 当前尚未设置默认项目。${RESET}"
         return 1
+    fi
+    return 0
+}
+
+# ---------- 显示当前项目 ----------
+show_current_project() {
+    if auto_get_project; then
+        echo -e "当前默认项目: ${CYAN}${PROJECT}${RESET}"
     else
-        echo -e "${GREEN}>>> 当前默认项目: $PROJECT${RESET}"
-        return 0
+        echo -e "当前默认项目: ${YELLOW}(未设置)${RESET}"
     fi
 }
 
 # ---------- 自动启用 API ----------
 ensure_required_apis() {
-    local apis=(
-        "compute.googleapis.com"
-    )
-
-    if ! auto_get_project >/dev/null 2>&1; then
-        echo -e "${YELLOW}[提示] 尚未设置默认项目，无法启用 API。${RESET}"
+    if ! auto_get_project; then
+        echo -e "${YELLOW}[提示] 当前未设置默认项目，无法启用 API。${RESET}"
         return 1
     fi
 
+    local apis=("compute.googleapis.com")
     echo "------------------------------------"
     echo ">>> 检查并自动启用所需 API ..."
+    local api enabled
+
     for api in "${apis[@]}"; do
-        local enabled
         enabled=$(gcloud services list --enabled --project="$PROJECT" \
             --filter="config.name:${api}" \
             --format="value(config.name)" 2>/dev/null)
@@ -158,7 +151,7 @@ create_project_interactive() {
 
     gcloud projects create "$new_project_id" --name="$new_project_name"
     if [ $? -ne 0 ]; then
-        echo -e "${RED}[错误] 项目创建失败。可能是项目ID已占用、权限不足或组织策略限制。${RESET}"
+        echo -e "${RED}[错误] 项目创建失败。${RESET}"
         return 1
     fi
 
@@ -173,11 +166,10 @@ create_project_interactive() {
             ensure_required_apis
         fi
     fi
-
     return 0
 }
 
-# ---------- 查看并选择项目 ----------
+# ---------- 选择项目 ----------
 select_project() {
     echo -e "\n>>> 正在获取账号下的项目列表..."
     local projects_data
@@ -189,9 +181,8 @@ select_project() {
         if [[ "$create_choice" == "y" || "$create_choice" == "Y" ]]; then
             create_project_interactive
             return $?
-        else
-            return 1
         fi
+        return 1
     fi
 
     local pids=()
@@ -207,7 +198,6 @@ select_project() {
         echo "  [$i] 项目ID: ${CYAN}$pid${RESET} | 项目名: $pname"
         ((i++))
     done <<< "$projects_data"
-
     echo "  [c] 创建新项目"
     echo "  [0] 返回主菜单"
     echo "------------------------------------"
@@ -221,8 +211,7 @@ select_project() {
             create_project_interactive
             return $?
         elif [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -lt "$i" ]; then
-            local idx=$((choice-1))
-            PROJECT="${pids[$idx]}"
+            PROJECT="${pids[$((choice-1))]}"
             echo -e "${GREEN}>>> 已选择项目: $PROJECT${RESET}"
             return 0
         else
@@ -231,7 +220,7 @@ select_project() {
     done
 }
 
-# ---------- 功能1：查看账号下项目 ----------
+# ---------- 功能1：查看项目 ----------
 func_view_projects() {
     echo -e "\n>>> 查看账号下所有项目..."
     gcloud projects list
@@ -253,15 +242,21 @@ func_set_default_project() {
     echo
 }
 
-# ---------- 选择区域（多选） ----------
-select_regions_multi() {
+# ---------- 显示区域菜单 ----------
+print_region_menu() {
     echo "【亚太区域列表】"
     local i=1
+    local region
     for region in "${REGION_LIST[@]}"; do
         echo "  [$i] $region    ${REGION_CIDR_MAP[$region]}    别名:${REGION_ALIAS_MAP[$region]}"
         ((i++))
     done
     echo "------------------------------------"
+}
+
+# ---------- 选择区域（多选） ----------
+select_regions_multi() {
+    print_region_menu
     read -p "请输入区域编号，可多选（如 1,2,4；直接回车默认 2=asia-east2）: " region_choices
     region_choices=${region_choices:-2}
 
@@ -270,6 +265,7 @@ select_regions_multi() {
     cleaned=$(echo "$region_choices" | tr -d ' ')
 
     IFS=',' read -ra nums <<< "$cleaned"
+    local n
     for n in "${nums[@]}"; do
         if [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -ge 1 ] && [ "$n" -le "${#REGION_LIST[@]}" ]; then
             selected_regions+=("${REGION_LIST[$((n-1))]}")
@@ -282,19 +278,7 @@ select_regions_multi() {
         selected_regions=("asia-east2")
     fi
 
-    echo "${selected_regions[@]}"
-}
-
-# ---------- 组合区域前缀，如 tw-hk-jp2 ----------
-build_region_combo_prefix() {
-    local regions=("$@")
-    local aliases=()
-    local r
-    for r in "${regions[@]}"; do
-        aliases+=("${REGION_ALIAS_MAP[$r]}")
-    done
-    local IFS='-'
-    echo "${aliases[*]}"
+    printf '%s\n' "${selected_regions[@]}"
 }
 
 # ---------- 功能3：创建 VPC 和双栈子网 ----------
@@ -315,8 +299,14 @@ func_create_vpc_subnets() {
     VPC_NAME=${VPC_NAME:-$DEFAULT_VPC_NAME}
 
     echo "------------------------------------"
-    local selected_regions
-    selected_regions=($(select_regions_multi))
+    local selected_regions=()
+    mapfile -t selected_regions < <(select_regions_multi)
+
+    if [ "${#selected_regions[@]}" -eq 0 ]; then
+        echo -e "${RED}[错误] 未获取到有效区域，操作终止。${RESET}"
+        return
+    fi
+
     echo "你选择的区域: ${selected_regions[*]}"
     echo "------------------------------------"
 
@@ -342,21 +332,30 @@ func_create_vpc_subnets() {
 
     local idx=1
     local total="${#selected_regions[@]}"
-    local region
+    local region cidr alias final_subnet_name
+
     for region in "${selected_regions[@]}"; do
-        local cidr="${REGION_CIDR_MAP[$region]}"
-        local alias="${REGION_ALIAS_MAP[$region]}"
-        local final_subnet_name="$alias"
+        cidr="${REGION_CIDR_MAP[$region]:-}"
+        alias="${REGION_ALIAS_MAP[$region]:-}"
+        final_subnet_name="$alias"
+
+        if [ -z "$cidr" ]; then
+            echo -e "${RED}[错误] 区域 [$region] 没有匹配到 IPv4 CIDR，已跳过。${RESET}"
+            ((idx++))
+            continue
+        fi
 
         if [ -z "$alias" ]; then
-            echo -e "${RED}[错误] 区域 [$region] 没有定义简称，请检查 REGION_ALIAS_MAP。${RESET}"
+            echo -e "${RED}[错误] 区域 [$region] 没有定义简称，已跳过。${RESET}"
+            ((idx++))
             continue
         fi
 
         echo "[$idx/$total] 创建子网: $final_subnet_name | 区域: $region | IPv4: $cidr"
 
         if gcloud compute networks subnets describe "$final_subnet_name" \
-            --project="$PROJECT" --region="$region" >/dev/null 2>&1; then
+            --project="$PROJECT" \
+            --region="$region" >/dev/null 2>&1; then
             echo -e "${YELLOW}[提示] 子网 $final_subnet_name ($region) 已存在，跳过。${RESET}"
         else
             gcloud compute networks subnets create "$final_subnet_name" \
@@ -379,9 +378,9 @@ func_create_vpc_subnets() {
     echo -e "${GREEN}>>> VPC / 双栈子网处理完成。${RESET}\n"
 }
 
-# ---------- 选择指定 VPC 下的子网 ----------
+# ---------- 选择 VPC 下子网 ----------
 select_subnet_in_vpc() {
-    if ! auto_get_project >/dev/null 2>&1; then
+    if ! auto_get_project; then
         echo -e "${YELLOW}[提示] 当前未设置默认项目。${RESET}"
         return 1
     fi
@@ -422,9 +421,8 @@ select_subnet_in_vpc() {
         if [[ "$choice" == "0" ]]; then
             return 1
         elif [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -lt "$i" ]; then
-            local idx=$((choice-1))
-            SUBNET_NAME="${snames[$idx]}"
-            SUBNET_REGION="${sregions[$idx]}"
+            SUBNET_NAME="${snames[$((choice-1))]}"
+            SUBNET_REGION="${sregions[$((choice-1))]}"
             echo -e "${GREEN}>>> 已选择子网: $SUBNET_NAME ($SUBNET_REGION)${RESET}"
             return 0
         else
@@ -433,10 +431,9 @@ select_subnet_in_vpc() {
     done
 }
 
-# ---------- 自动列出 region 下可用 zone 并选择 ----------
+# ---------- 选择 region 下可用 zone ----------
 select_zone_from_region() {
     local region="$1"
-
     echo "------------------------------------"
     echo ">>> 正在获取 region [$region] 下的可用 zone ..."
 
@@ -452,25 +449,24 @@ select_zone_from_region() {
     fi
 
     local zones=()
-    local statuses=()
     local i=1
+    local zname zstatus
 
     echo "可用区列表："
     while read -r zname zstatus; do
         [ -z "$zname" ] && continue
         zones+=("$zname")
-        statuses+=("$zstatus")
         echo "  [$i] $zname   状态:$zstatus"
         ((i++))
     done <<< "$zone_data"
 
     echo "------------------------------------"
+    local choice
     while true; do
         read -p "请选择可用区编号 [默认: 1]: " choice
         choice=${choice:-1}
         if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -lt "$i" ]; then
-            local idx=$((choice-1))
-            ZONE="${zones[$idx]}"
+            ZONE="${zones[$((choice-1))]}"
             echo -e "${GREEN}>>> 已选择可用区: $ZONE${RESET}"
             return 0
         else
@@ -479,7 +475,7 @@ select_zone_from_region() {
     done
 }
 
-# ---------- 功能4：创建虚拟机 ----------
+# ---------- 功能4：创建 VM ----------
 func_create_vm() {
     echo -e "\n>>> 准备创建虚拟机..."
     if ! auto_get_project >/dev/null 2>&1; then
@@ -545,10 +541,11 @@ func_create_vm() {
     fi
 }
 
-# ---------- 自动扫描并选择已有实例 ----------
+# ---------- 选择已有实例 ----------
 select_existing_vm() {
     echo -e "\n>>> 正在扫描当前项目下的实例..."
-    if ! auto_get_project >/dev/null 2>&1; then
+    if ! auto_get_project; then
+        echo -e "${YELLOW}[提示] 当前未设置默认项目。${RESET}"
         return 1
     fi
 
@@ -563,6 +560,7 @@ select_existing_vm() {
     local names=()
     local zones=()
     local i=1
+    local name zone
 
     echo "------------------------------------"
     echo "发现以下实例,请选择要操作的机器:"
@@ -573,6 +571,7 @@ select_existing_vm() {
         echo -e "  [$i] 实例名: ${CYAN}$name${RESET} (可用区: $zone)"
         ((i++))
     done <<< "$instances_data"
+
     echo "  [0] 取消操作并返回主菜单"
     echo "------------------------------------"
 
@@ -583,9 +582,8 @@ select_existing_vm() {
             echo "操作已取消。"
             return 1
         elif [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -lt "$i" ]; then
-            local idx=$((choice-1))
-            NAME="${names[$idx]}"
-            ZONE="${zones[$idx]}"
+            NAME="${names[$((choice-1))]}"
+            ZONE="${zones[$((choice-1))]}"
             echo -e "${GREEN}>>> 已锁定目标: $NAME ($ZONE)${RESET}"
             return 0
         else
@@ -597,7 +595,10 @@ select_existing_vm() {
 # ---------- 功能5：查看防火墙规则 ----------
 func_view_firewall() {
     echo -e "\n>>> 准备获取当前项目的防火墙规则..."
-    if ! auto_get_project >/dev/null 2>&1; then return; fi
+    if ! auto_get_project; then
+        echo -e "${YELLOW}[提示] 请先设置默认项目。${RESET}"
+        return
+    fi
     if ! ensure_required_apis; then return; fi
 
     echo "------------------------------------"
@@ -610,7 +611,10 @@ func_view_firewall() {
 # ---------- 功能6：设置防火墙规则 ----------
 func_setup_firewall() {
     echo -e "\n>>> 准备设置防火墙规则..."
-    if ! auto_get_project >/dev/null 2>&1; then return; fi
+    if ! auto_get_project; then
+        echo -e "${YELLOW}[提示] 请先设置默认项目。${RESET}"
+        return
+    fi
     if ! ensure_required_apis; then return; fi
 
     read -p "请输入目标 VPC 名称 [默认: ${DEFAULT_VPC_NAME}]: " VPC_NAME
@@ -675,6 +679,8 @@ func_setup_ssh() {
     echo -e "\n>>> 准备配置 SSH 环境..."
     if ! select_existing_vm; then return; fi
 
+    local ROOT_PASS ROOT_PASS_CONFIRM
+
     while true; do
         read -s -p "请设置新的 Root 密码 (输入时不可见): " ROOT_PASS
         echo
@@ -714,10 +720,13 @@ sudo systemctl restart ssh || sudo systemctl restart sshd"
     echo
 }
 
-# ---------- 功能9：查看当前项目下所有实例信息 ----------
+# ---------- 功能9：查看实例信息 ----------
 func_view_vm() {
     echo -e "\n>>> 准备扫描当前项目下的所有实例信息..."
-    if ! auto_get_project >/dev/null 2>&1; then return; fi
+    if ! auto_get_project; then
+        echo -e "${YELLOW}[提示] 请先设置默认项目。${RESET}"
+        return
+    fi
     if ! ensure_required_apis; then return; fi
 
     echo "------------------------------------"
@@ -772,15 +781,9 @@ main_menu() {
         echo " 10. 删除实例"
         echo "  0. 退出脚本"
         echo "=============================================="
-
-        if auto_get_project >/dev/null 2>&1; then
-            current_project=$(gcloud config get-value project 2>/dev/null | tr -d '\r')
-            echo -e "当前默认项目: ${CYAN}${current_project}${RESET}"
-        else
-            echo -e "当前默认项目: ${YELLOW}(未设置)${RESET}"
-        fi
-
+        show_current_project
         echo "----------------------------------------------"
+
         read -p "请输入对应的数字 [0-10]: " choice
 
         case $choice in
@@ -800,6 +803,6 @@ main_menu() {
     done
 }
 
-# ---------- 程序入口 ----------
+# ---------- 入口 ----------
 check_gcloud
 main_menu
