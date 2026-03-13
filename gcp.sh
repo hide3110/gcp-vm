@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ====================================
-# GCP 实例 / VPC 快捷管理脚本(最终全量版)
+# GCP 实例 / VPC 快捷管理脚本(最终全量版 v1.7)
 # ====================================
 
 set -u
@@ -277,6 +277,12 @@ build_firewall_rule_names() {
 # ---------- 清洗资源名 ----------
 sanitize_name() {
     echo "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g; s/--*/-/g; s/^-//; s/-$//'
+}
+
+# ---------- 结算账号ID格式化 ----------
+normalize_billing_account_id() {
+    local raw="$1"
+    echo "${raw#billingAccounts/}"
 }
 
 # ---------- 选择已有实例 ----------
@@ -1089,7 +1095,122 @@ func_view_vm() {
     echo
 }
 
-# ---------- 功能11:删除实例 ----------
+# ---------- 功能11:切换项目结算账号 ----------
+func_switch_billing_account() {
+    echo -e "\n>>> 准备切换项目结算账号..."
+    if ! auto_get_project; then
+        echo -e "${YELLOW}[提示] 请先设置默认项目。${RESET}"
+        return
+    fi
+
+    echo "------------------------------------"
+    echo "当前项目: ${CYAN}$PROJECT${RESET}"
+    echo "-> 正在查询当前项目绑定的结算账号..."
+
+    local current_billing_name current_billing_enabled current_billing_id
+    current_billing_name=$(gcloud billing projects describe "$PROJECT" \
+        --format="value(billingAccountName)" 2>/dev/null)
+    current_billing_enabled=$(gcloud billing projects describe "$PROJECT" \
+        --format="value(billingEnabled)" 2>/dev/null)
+
+    if [ -n "$current_billing_name" ]; then
+        current_billing_id=$(normalize_billing_account_id "$current_billing_name")
+        echo "当前绑定状态: ${current_billing_enabled:-true}"
+        echo "当前绑定结算账号: ${CYAN}$current_billing_id${RESET}"
+    else
+        echo -e "${YELLOW}[提示] 当前项目尚未绑定结算账号。${RESET}"
+    fi
+
+    echo "------------------------------------"
+    echo "-> 正在获取账户下可见的结算账号列表..."
+
+    local billing_data
+    billing_data=$(gcloud billing accounts list \
+        --format="value(name,displayName,open)" 2>/dev/null)
+
+    if [ -z "$billing_data" ]; then
+        echo -e "${RED}[错误] 未查询到任何结算账号。${RESET}"
+        echo -e "${YELLOW}[提示] 可能原因: 当前账号无 Billing 权限,或当前账号下没有可用结算账号。${RESET}"
+        echo
+        return
+    fi
+
+    local acct_fullnames=()
+    local acct_ids=()
+    local acct_names=()
+    local acct_status=()
+    local i=1
+    local full_name display_name is_open acct_id display_credit
+
+    echo "------------------------------------"
+    echo "可用结算账号列表:"
+    while IFS=$'\t' read -r full_name display_name is_open; do
+        [ -z "$full_name" ] && continue
+        acct_id=$(normalize_billing_account_id "$full_name")
+        display_credit="N/A"
+        acct_fullnames+=("$full_name")
+        acct_ids+=("$acct_id")
+        acct_names+=("$display_name")
+        acct_status+=("$is_open")
+        echo "  [$i] 账号ID: ${CYAN}$acct_id${RESET}"
+        echo "      名称:   $display_name"
+        echo "      状态:   $is_open"
+        echo "      赠金:   $display_credit"
+        ((i++))
+    done <<< "$billing_data"
+
+    echo "  [0] 返回主菜单"
+    echo "------------------------------------"
+    echo -e "${YELLOW}[说明] 赠金金额在标准 gcloud 结算账号列表中通常无法直接精确获取,此处显示为 N/A。${RESET}"
+
+    local choice
+    while true; do
+        read -p "请选择要绑定到当前项目的结算账号编号 [0-$((i-1))]: " choice
+        if [[ "$choice" == "0" ]]; then
+            echo "已取消。"
+            echo
+            return
+        elif [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -lt "$i" ]; then
+            local idx=$((choice-1))
+            local selected_acct_id="${acct_ids[$idx]}"
+            local selected_acct_name="${acct_names[$idx]}"
+
+            if [ -n "${current_billing_id:-}" ] && [ "$selected_acct_id" = "$current_billing_id" ]; then
+                echo -e "${YELLOW}[提示] 当前项目已经绑定到该结算账号,无需切换。${RESET}"
+                echo
+                return
+            fi
+
+            echo "------------------------------------"
+            echo "当前项目: $PROJECT"
+            echo "目标结算账号ID: $selected_acct_id"
+            echo "目标结算账号名: $selected_acct_name"
+            read -p "确认切换当前项目的结算账号吗?(y/N): " confirm_link
+
+            if [[ "$confirm_link" != "y" && "$confirm_link" != "Y" ]]; then
+                echo "已取消。"
+                echo
+                return
+            fi
+
+            gcloud billing projects link "$PROJECT" \
+                --billing-account="$selected_acct_id"
+
+            if [ $? -eq 0 ]; then
+                echo -e "${GREEN}>>> 项目 [$PROJECT] 已成功切换到结算账号 [$selected_acct_id] !${RESET}"
+            else
+                echo -e "${RED}[错误] 结算账号切换失败。${RESET}"
+                echo -e "${YELLOW}[提示] 请检查是否具有 Billing Account User / Project Billing Manager 等权限。${RESET}"
+            fi
+            echo
+            return
+        else
+            echo -e "${YELLOW}[错误] 输入无效,请重试。${RESET}"
+        fi
+    done
+}
+
+# ---------- 功能12:删除实例 ----------
 func_delete_vm() {
     echo -e "\n${RED}>>> [警告] 准备执行删除实例操作...${RESET}"
     if ! select_existing_vm; then return; fi
@@ -1112,7 +1233,7 @@ func_delete_vm() {
     fi
 }
 
-# ---------- 功能12:删除 VPC/子网 ----------
+# ---------- 功能13:删除 VPC/子网 ----------
 func_delete_vpc_subnets() {
     echo -e "\n>>> 准备删除 VPC/子网..."
     if ! auto_get_project; then
@@ -1221,7 +1342,7 @@ func_delete_vpc_subnets() {
     echo
 }
 
-# ---------- 功能13:删除 防火墙规则 ----------
+# ---------- 功能14:删除 防火墙规则 ----------
 func_delete_firewall_rules() {
     echo -e "\n>>> 准备删除防火墙规则..."
     if ! auto_get_project; then
@@ -1267,9 +1388,9 @@ func_delete_firewall_rules() {
 # ---------- 主菜单 ----------
 main_menu() {
     while true; do
-        echo "======================================================"
-        echo "      GCP 实例 / VPC 快捷管理脚本  v1.6               "
-        echo "======================================================"
+        echo "=============================================================="
+        echo "         GCP 实例 / VPC 快捷管理脚本  v1.7                    "
+        echo "=============================================================="
         echo "  1. 查看账号的项目"
         echo "  2. 设置默认项目"
         echo "  3. 创建 VPC 网络和双栈子网(IPv4+IPv6)"
@@ -1280,15 +1401,16 @@ main_menu() {
         echo "  8. 更换系统镜像源 (Debian 12 专用)"
         echo "  9. 一键配置 SSH (Root密码+端口${DEFAULT_SSH_PORT})"
         echo " 10. 查看当前项目下所有实例信息"
-        echo " 11. 删除实例"
-        echo " 12. 删除 VPC/子网"
-        echo " 13. 删除 防火墙规则"
+        echo " 11. 切换项目结算账号"
+        echo " 12. 删除实例"
+        echo " 13. 删除 VPC/子网"
+        echo " 14. 删除 防火墙规则"
         echo "  0. 退出脚本"
-        echo "======================================================"
+        echo "=============================================================="
         show_current_project
-        echo "------------------------------------------------------"
+        echo "--------------------------------------------------------------"
 
-        read -p "请输入对应的数字 [0-13]: " choice
+        read -p "请输入对应的数字 [0-14]: " choice
         case $choice in
             1) func_view_projects ;;
             2) func_set_default_project ;;
@@ -1300,9 +1422,10 @@ main_menu() {
             8) func_change_apt_source ;;
             9) func_setup_ssh ;;
             10) func_view_vm ;;
-            11) func_delete_vm ;;
-            12) func_delete_vpc_subnets ;;
-            13) func_delete_firewall_rules ;;
+            11) func_switch_billing_account ;;
+            12) func_delete_vm ;;
+            13) func_delete_vpc_subnets ;;
+            14) func_delete_firewall_rules ;;
             0) echo "已退出。"; exit 0 ;;
             *) echo -e "\n[错误] 无效的选项,请重新输入!\n" ;;
         esac
