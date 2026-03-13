@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ====================================
-# GCP 实例 / VPC 快捷管理脚本(最终全量版 v1.7)
+# GCP 实例 / VPC 快捷管理脚本(最终全量版 v1.8)
 # ====================================
 
 set -u
@@ -26,6 +26,9 @@ FW_RULE_V4IN=""
 FW_RULE_V4OUT=""
 FW_RULE_V6IN=""
 FW_RULE_V6OUT=""
+
+# 同一个项目只检查一次 API
+API_READY_PROJECT=""
 
 # ---------- 颜色 ----------
 GREEN="\033[92m"
@@ -108,11 +111,16 @@ show_current_project() {
     fi
 }
 
-# ---------- 自动启用 API ----------
+# ---------- 自动启用 API（同一项目只检查一次） ----------
 ensure_required_apis() {
     if ! auto_get_project; then
         echo -e "${YELLOW}[提示] 当前未设置默认项目,无法启用 API。${RESET}"
         return 1
+    fi
+
+    # 如果当前项目已经检查过,直接跳过
+    if [ "${API_READY_PROJECT:-}" = "$PROJECT" ]; then
+        return 0
     fi
 
     local apis=("compute.googleapis.com")
@@ -139,6 +147,8 @@ ensure_required_apis() {
         fi
     done
     echo "------------------------------------"
+
+    API_READY_PROJECT="$PROJECT"
     return 0
 }
 
@@ -171,6 +181,7 @@ create_project_interactive() {
             ensure_required_apis
         fi
     fi
+    echo
     return 0
 }
 
@@ -199,7 +210,7 @@ select_project() {
     while read -r pid pname; do
         [ -z "$pid" ] && continue
         pids+=("$pid")
-        echo "  [$i] 项目ID: ${CYAN}$pid${RESET} | 项目名: $pname"
+        echo -e "  [$i] 项目ID: ${CYAN}$pid${RESET} | 项目名: $pname"
         ((i++))
     done <<< "$projects_data"
     echo "  [c] 创建新项目"
@@ -449,6 +460,7 @@ func_set_default_project() {
 
     gcloud config set project "$PROJECT"
     if [ $? -eq 0 ]; then
+        API_READY_PROJECT=""
         echo -e "${GREEN}>>> 默认项目已设置为: $PROJECT${RESET}"
         ensure_required_apis
     else
@@ -464,6 +476,7 @@ func_create_vpc_subnets() {
         echo -e "${YELLOW}[提示] 请先设置默认项目。${RESET}"
         if ! select_project; then return; fi
         gcloud config set project "$PROJECT" >/dev/null
+        API_READY_PROJECT=""
     fi
 
     if ! ensure_required_apis; then
@@ -575,6 +588,7 @@ func_create_vm() {
         echo -e "${YELLOW}[提示] 请先设置默认项目。${RESET}"
         if ! select_project; then return; fi
         gcloud config set project "$PROJECT" >/dev/null
+        API_READY_PROJECT=""
     fi
 
     if ! ensure_required_apis; then
@@ -1104,7 +1118,7 @@ func_switch_billing_account() {
     fi
 
     echo "------------------------------------"
-    echo "当前项目: ${CYAN}$PROJECT${RESET}"
+    echo -e "当前项目: ${CYAN}$PROJECT${RESET}"
     echo "-> 正在查询当前项目绑定的结算账号..."
 
     local current_billing_name current_billing_enabled current_billing_id
@@ -1116,7 +1130,7 @@ func_switch_billing_account() {
     if [ -n "$current_billing_name" ]; then
         current_billing_id=$(normalize_billing_account_id "$current_billing_name")
         echo "当前绑定状态: ${current_billing_enabled:-true}"
-        echo "当前绑定结算账号: ${CYAN}$current_billing_id${RESET}"
+        echo -e "当前绑定结算账号: ${CYAN}$current_billing_id${RESET}"
     else
         echo -e "${YELLOW}[提示] 当前项目尚未绑定结算账号。${RESET}"
     fi
@@ -1135,33 +1149,28 @@ func_switch_billing_account() {
         return
     fi
 
-    local acct_fullnames=()
     local acct_ids=()
     local acct_names=()
     local acct_status=()
     local i=1
-    local full_name display_name is_open acct_id display_credit
+    local full_name display_name is_open acct_id
 
     echo "------------------------------------"
     echo "可用结算账号列表:"
     while IFS=$'\t' read -r full_name display_name is_open; do
         [ -z "$full_name" ] && continue
         acct_id=$(normalize_billing_account_id "$full_name")
-        display_credit="N/A"
-        acct_fullnames+=("$full_name")
         acct_ids+=("$acct_id")
         acct_names+=("$display_name")
         acct_status+=("$is_open")
-        echo "  [$i] 账号ID: ${CYAN}$acct_id${RESET}"
+        echo -e "  [$i] 账号ID: ${CYAN}$acct_id${RESET}"
         echo "      名称:   $display_name"
         echo "      状态:   $is_open"
-        echo "      赠金:   $display_credit"
         ((i++))
     done <<< "$billing_data"
 
     echo "  [0] 返回主菜单"
     echo "------------------------------------"
-    echo -e "${YELLOW}[说明] 赠金金额在标准 gcloud 结算账号列表中通常无法直接精确获取,此处显示为 N/A。${RESET}"
 
     local choice
     while true; do
@@ -1389,7 +1398,7 @@ func_delete_firewall_rules() {
 main_menu() {
     while true; do
         echo "=============================================================="
-        echo "         GCP 实例 / VPC 快捷管理脚本  v1.7                    "
+        echo "         GCP 实例 / VPC 快捷管理脚本  v1.8                    "
         echo "=============================================================="
         echo "  1. 查看账号的项目"
         echo "  2. 设置默认项目"
